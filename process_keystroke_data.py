@@ -24,7 +24,7 @@ Outputs:
 - Outlier filtering: Excludes intervals <30ms or >3000ms to focus on realistic typing behavior
 
 Usage:
-python process_keystroke_data.py output/filtered_metadata_participants.txt Keystrokes/files/
+python process_keystroke_data.py filtered_metadata_participants.txt data/files/
 """
 import csv
 import sys
@@ -205,15 +205,8 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                         if is_letter(char):
                             correct_letters.append((char, press_time, user_input))
                             current_word_letters.append((char.lower(), press_time))
-                        
-                        correct_all_chars.append((char, press_time))
-                        expected_pos += 1
-                        
-                        # Check for word boundary (space or end of expected sequence)
-                        if (char == ' ' or expected_pos >= len(expected_sequence) or 
-                            (expected_pos < len(expected_sequence) and expected_sequence[expected_pos] == ' ')):
-                            
-                            # Process completed word if we have letters
+                        elif char == ' ':
+                            # Space character - end of current word
                             if current_word_letters and current_word_index < len(expected_words):
                                 # Check if the typed word matches the expected word
                                 typed_word = ''.join([letter for letter, _ in current_word_letters])
@@ -221,7 +214,6 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                                 
                                 if typed_word == expected_word and len(typed_word) > 1:
                                     # Only include words with more than 1 letter (need interkey intervals)
-                                    # Single-letter words have no meaningful timing data (first=last letter)
                                     first_letter_time = current_word_letters[0][1]
                                     last_letter_time = current_word_letters[-1][1]
                                     word_duration = last_letter_time - first_letter_time
@@ -234,10 +226,26 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                             
                             # Reset for next word
                             current_word_letters = []
+                        
+                        correct_all_chars.append((char, press_time))
+                        expected_pos += 1
                     else:
                         # Incorrect keystroke - this breaks the sequence
                         # We could reset or continue, but for now we'll just skip this keystroke
                         pass
+                
+                # Process the final word if we ended on a word (no trailing space)
+                if current_word_letters and current_word_index < len(expected_words):
+                    typed_word = ''.join([letter for letter, _ in current_word_letters])
+                    expected_word = expected_words[current_word_index]
+                    
+                    if typed_word == expected_word and len(typed_word) > 1:
+                        first_letter_time = current_word_letters[0][1]
+                        last_letter_time = current_word_letters[-1][1]
+                        word_duration = last_letter_time - first_letter_time
+                        
+                        if MIN_INTERVAL_MS <= word_duration <= MAX_INTERVAL_MS:
+                            word_times.append((participant_id, sentence_key, expected_word, word_duration, first_letter_time, last_letter_time))
                 
                 # Calculate sentence timing from correct letters only
                 if len(correct_letters) >= 2:
