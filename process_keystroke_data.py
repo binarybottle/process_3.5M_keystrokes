@@ -6,12 +6,12 @@ Processes keystroke files for filtered participants to calculate:
 
 Only includes data for keystrokes that match the expected target text (no typing errors).
 Single-letter words are excluded from word timing analysis since they have no interkey intervals.
-Bigrams and words with intervals <30ms or >3000ms are excluded.
+Bigrams and words with intervals <30ms or >3000ms are excluded to filter out hardware issues and thinking pauses.
 
 Outputs:
-- bigram_times.csv: bigram, interkey_interval (correct bigrams 30-3000ms only)
+- bigram_times.csv: participant_id, sentence_id, bigram, interkey_interval, timestamp1, timestamp2
 - sentence_times.csv: sentence, time (correct sentences only)
-- word_times.csv: word, time (correct multi-letter words 30-3000ms only)
+- word_times.csv: participant_id, sentence_id, word, time, start_timestamp, end_timestamp
 
 - Reads filtered participants: Gets participant IDs from your filtered metadata file
 - Processes keystroke files: Finds and reads each #_keystrokes.txt file
@@ -24,7 +24,7 @@ Outputs:
 - Outlier filtering: Excludes intervals <30ms or >3000ms to focus on realistic typing behavior
 
 Usage:
-python process_keystroke_data.py filtered_metadata_participants.txt data/files/
+python process_keystroke_data.py output/filtered_metadata_participants.txt Keystrokes/files/
 """
 import csv
 import sys
@@ -228,7 +228,7 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                                     
                                     # Only include words with reasonable timing (exclude outliers)
                                     if MIN_INTERVAL_MS <= word_duration <= MAX_INTERVAL_MS:
-                                        word_times.append((expected_word, word_duration))
+                                        word_times.append((participant_id, sentence_key, expected_word, word_duration, first_letter_time, last_letter_time))
                                 
                                 current_word_index += 1
                             
@@ -259,7 +259,7 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                         # Only include bigrams with reasonable intervals (exclude outliers)
                         if MIN_INTERVAL_MS <= interval <= MAX_INTERVAL_MS:
                             bigram = char1.lower() + char2.lower()
-                            bigram_intervals.append((bigram, interval))
+                            bigram_intervals.append((participant_id, sentence_key, bigram, interval, time1, time2))
                     
     except FileNotFoundError:
         print(f"Warning: Keystroke file not found for participant {participant_id}")
@@ -312,7 +312,7 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
     try:
         with open(output_file, 'w', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            writer.writerow(['bigram', 'interkey_interval'])
+            writer.writerow(['participant_id', 'sentence_id', 'bigram', 'interkey_interval', 'timestamp1', 'timestamp2'])
             writer.writerows(all_bigrams)
         
         print(f"Correct bigram results ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms) written to: {output_file}")
@@ -338,7 +338,7 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
     try:
         with open(word_output_file, 'w', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            writer.writerow(['word', 'time'])
+            writer.writerow(['participant_id', 'sentence_id', 'word', 'time', 'start_timestamp', 'end_timestamp'])
             writer.writerows(all_word_times)
         
         print(f"Correct multi-letter word timing results ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms) written to: {word_output_file}")
@@ -348,9 +348,9 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
     
     # Show statistics
     if all_bigrams:
-        intervals = [interval for _, interval in all_bigrams]
+        intervals = [interval for _, _, _, interval, _, _ in all_bigrams]
         bigram_counts = defaultdict(int)
-        for bigram, _ in all_bigrams:
+        for _, _, bigram, _, _, _ in all_bigrams:
             bigram_counts[bigram] += 1
         
         print(f"\nCorrect Bigram Statistics ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms):")
@@ -370,9 +370,9 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
         print(f"  Max sentence time: {max(times)} ms")
     
     if all_word_times:
-        times = [time for _, time in all_word_times]
+        times = [time for _, _, _, time, _, _ in all_word_times]
         word_counts = defaultdict(int)
-        for word, _ in all_word_times:
+        for _, _, word, _, _, _ in all_word_times:
             word_counts[word] += 1
         
         print(f"\nCorrect Multi-Letter Word Timing Statistics ({MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms):")
@@ -391,9 +391,9 @@ def main():
         print("Usage: python process_keystroke_data.py <filtered_participants_file> [keystroke_directory]")
         print("Example: python process_keystroke_data.py filtered_metadata_participants.txt ./data/files/")
         print(f"\nOutputs (correctly typed data with {MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms intervals only):")
-        print("  - bigram_times.csv: Bigram interkey intervals")
-        print("  - sentence_times.csv: Sentence timing data")
-        print("  - word_times.csv: Word timing data (multi-letter words only)")
+        print("  - bigram_times.csv: participant_id, sentence_id, bigram, interkey_interval, timestamp1, timestamp2")
+        print("  - sentence_times.csv: sentence, time")
+        print("  - word_times.csv: participant_id, sentence_id, word, time, start_timestamp, end_timestamp")
         sys.exit(1)
     
     filtered_file = sys.argv[1]
