@@ -1,8 +1,7 @@
 """
 Processes keystroke files for filtered participants to calculate:
 1. Interkey intervals for correctly typed letter bigrams (excludes spaces, Shift, etc.)
-2. Sentence timing data (first to last letter press time) for correctly typed sentences
-3. Word timing data (first to last letter press time per word) for correctly typed multi-letter words
+2. Word timing data (first to last letter press time per word) for correctly typed multi-letter words
 
 Only includes data for keystrokes that match the expected target text (no typing errors).
 Single-letter words are excluded from word timing analysis since they have no interkey intervals.
@@ -10,7 +9,6 @@ Bigrams and words with intervals <30ms or >3000ms are excluded to filter out har
 
 Outputs:
 - bigram_times.csv: participant_id, sentence_id, bigram, interkey_interval, timestamp1, timestamp2
-- sentence_times.csv: sentence, time (correct sentences only)
 - word_times.csv: participant_id, sentence_id, word, time, start_timestamp, end_timestamp
 
 - Reads filtered participants: Gets participant IDs from your filtered metadata file
@@ -117,11 +115,10 @@ def get_expected_sequence(target_text):
     return expected_chars
 
 def process_keystroke_file(participant_id, keystroke_dir="."):
-    """Process a single participant's keystroke file to extract bigram intervals, sentence times, and word times"""
+    """Process a single participant's keystroke file to extract bigram intervals and word times"""
     
     filename = os.path.join(keystroke_dir, f"{participant_id}_keystrokes.txt")
     bigram_intervals = []
-    sentence_times = []
     word_times = []
     
     try:
@@ -138,11 +135,11 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                 test_section_idx = header.index('TEST_SECTION_ID')
             except ValueError as e:
                 print(f"Error: Required column not found in {filename} - {e}")
-                return [], [], []
+                return [], []
             
-            # Group keystrokes by sentence with target text for comparison
-            sentences_data = defaultdict(list)  # Store all keystroke data with target info
-            sentence_targets = {}  # Store target text for each sentence
+            # Collect data by sentence
+            sentence_data = defaultdict(list)
+            sentence_targets = {}
             
             for row in reader:
                 if len(row) <= max(letter_idx, press_time_idx, sentence_idx, user_input_idx, test_section_idx):
@@ -157,129 +154,116 @@ def process_keystroke_file(participant_id, keystroke_dir="."):
                     press_time = int(row[press_time_idx])
                     sentence_key = f"{test_section}_{sentence}"
                     
-                    # Store target sentence (assuming SENTENCE column contains the target text)
-                    if sentence_key not in sentence_targets:
-                        sentence_targets[sentence_key] = sentence
-                    
-                    # Collect all keystroke data
-                    sentences_data[sentence_key].append((letter, press_time, user_input, sentence))
+                    sentence_targets[sentence_key] = sentence
+                    sentence_data[sentence_key].append((letter, press_time, user_input, sentence))
                         
                 except ValueError:
                     continue
             
-            
-            # Process each sentence to extract correct bigrams, sentence times, and word times
-            for sentence_key, keystrokes in sentences_data.items():
-                # Sort by press time to ensure correct order
-                keystrokes.sort(key=lambda x: x[1])
+            # Process each sentence
+            for sentence_key, keystrokes in sentence_data.items():
+                keystrokes.sort(key=lambda x: x[1])  # Sort by timestamp
                 
                 if not keystrokes:
                     continue
                 
-                # Get target text for this sentence
                 target_text = sentence_targets[sentence_key]
                 expected_sequence = get_expected_sequence(target_text)
                 expected_words = extract_words_from_sentence(target_text)
                 
-                if not expected_sequence:
+                if not expected_sequence or not expected_words:
                     continue
                 
-                # Track position in expected sequence and collect correct keystrokes
-                expected_pos = 0
-                correct_letters = []  # For sentence timing
-                correct_all_chars = []  # For bigrams
-                current_word_letters = []  # For word timing
-                current_word_index = 0
+                # Extract word timings
+                letter_keystrokes = [(char.lower(), press_time) for char, press_time, _, _ in keystrokes if is_letter(char)]
+                used_positions = set()
                 
-                for keystroke in keystrokes:
-                    char, press_time, user_input, target_sentence = keystroke
-                    
-                    # Skip non-typable characters except spaces
-                    if not (is_typable_character(char) or char == ' '):
+                for expected_word in expected_words:
+                    if len(expected_word) <= 1:
                         continue
                     
-                    # Check if this character matches the expected character at current position
-                    if expected_pos < len(expected_sequence) and char.lower() == expected_sequence[expected_pos]:
-                        # Correct keystroke!
+                    for start_pos in range(len(letter_keystrokes) - len(expected_word) + 1):
+                        if any(pos in used_positions for pos in range(start_pos, start_pos + len(expected_word))):
+                            continue
                         
-                        if is_letter(char):
-                            correct_letters.append((char, press_time, user_input))
-                            current_word_letters.append((char.lower(), press_time))
-                        elif char == ' ':
-                            # Space character - end of current word
-                            if current_word_letters and current_word_index < len(expected_words):
-                                # Check if the typed word matches the expected word
-                                typed_word = ''.join([letter for letter, _ in current_word_letters])
-                                expected_word = expected_words[current_word_index]
-                                
-                                if typed_word == expected_word and len(typed_word) > 1:
-                                    # Only include words with more than 1 letter (need interkey intervals)
-                                    first_letter_time = current_word_letters[0][1]
-                                    last_letter_time = current_word_letters[-1][1]
-                                    word_duration = last_letter_time - first_letter_time
-                                    
-                                    # Only include words with reasonable timing (exclude outliers)
-                                    if MIN_INTERVAL_MS <= word_duration <= MAX_INTERVAL_MS:
-                                        word_times.append((participant_id, sentence_key, expected_word, word_duration, first_letter_time, last_letter_time))
-                                
-                                current_word_index += 1
+                        candidate_chars = []
+                        candidate_times = []
+                        
+                        for i in range(len(expected_word)):
+                            if start_pos + i < len(letter_keystrokes):
+                                char, press_time = letter_keystrokes[start_pos + i]
+                                candidate_chars.append(char)
+                                candidate_times.append(press_time)
+                        
+                        if len(candidate_chars) == len(expected_word):
+                            candidate_word = ''.join(candidate_chars)
                             
-                            # Reset for next word
-                            current_word_letters = []
-                        
-                        correct_all_chars.append((char, press_time))
-                        expected_pos += 1
-                    else:
-                        # Incorrect keystroke - this breaks the sequence
-                        # We could reset or continue, but for now we'll just skip this keystroke
-                        pass
+                            if candidate_word == expected_word:
+                                word_start_time = candidate_times[0]
+                                word_end_time = candidate_times[-1]
+                                word_duration = word_end_time - word_start_time
+                                
+                                if MIN_INTERVAL_MS <= word_duration <= MAX_INTERVAL_MS:
+                                    word_times.append((participant_id, sentence_key, expected_word, word_duration, word_start_time, word_end_time))
+                                    
+                                    for pos in range(start_pos, start_pos + len(expected_word)):
+                                        used_positions.add(pos)
+                                    break
                 
-                # Process the final word if we ended on a word (no trailing space)
-                if current_word_letters and current_word_index < len(expected_words):
-                    typed_word = ''.join([letter for letter, _ in current_word_letters])
-                    expected_word = expected_words[current_word_index]
-                    
-                    if typed_word == expected_word and len(typed_word) > 1:
-                        first_letter_time = current_word_letters[0][1]
-                        last_letter_time = current_word_letters[-1][1]
-                        word_duration = last_letter_time - first_letter_time
-                        
-                        if MIN_INTERVAL_MS <= word_duration <= MAX_INTERVAL_MS:
-                            word_times.append((participant_id, sentence_key, expected_word, word_duration, first_letter_time, last_letter_time))
+                # Extract bigram intervals from correctly identified words only
+                letter_keystrokes = [(char.lower(), press_time) for char, press_time, _, _ in keystrokes if is_letter(char)]
+                used_positions_for_bigrams = set()
                 
-                # Calculate sentence timing from correct letters only
-                if len(correct_letters) >= 2:
-                    first_time = correct_letters[0][1]
-                    last_time = correct_letters[-1][1]
-                    sentence_duration = last_time - first_time
-                    user_typed_sentence = correct_letters[0][2]  # Get the actual user input
-                    sentence_times.append((user_typed_sentence, sentence_duration))
-                
-                # Calculate bigram intervals from correct characters only
-                for i in range(len(correct_all_chars) - 1):
-                    char1, time1 = correct_all_chars[i]
-                    char2, time2 = correct_all_chars[i + 1]
+                for expected_word in expected_words:
+                    if len(expected_word) <= 1:
+                        continue
                     
-                    # Only create bigram if both characters are typable (not spaces)
-                    if is_typable_character(char1) and is_typable_character(char2):
-                        interval = time2 - time1  # milliseconds
+                    for start_pos in range(len(letter_keystrokes) - len(expected_word) + 1):
+                        if any(pos in used_positions_for_bigrams for pos in range(start_pos, start_pos + len(expected_word))):
+                            continue
                         
-                        # Only include bigrams with reasonable intervals (exclude outliers)
-                        if MIN_INTERVAL_MS <= interval <= MAX_INTERVAL_MS:
-                            bigram = char1.lower() + char2.lower()
-                            bigram_intervals.append((participant_id, sentence_key, bigram, interval, time1, time2))
-                    
+                        candidate_chars = []
+                        candidate_times = []
+                        
+                        for i in range(len(expected_word)):
+                            if start_pos + i < len(letter_keystrokes):
+                                char, press_time = letter_keystrokes[start_pos + i]
+                                candidate_chars.append(char)
+                                candidate_times.append(press_time)
+                        
+                        if len(candidate_chars) == len(expected_word):
+                            candidate_word = ''.join(candidate_chars)
+                            
+                            if candidate_word == expected_word:
+                                # Extract bigrams from this correctly typed word
+                                for i in range(len(candidate_chars) - 1):
+                                    char1 = candidate_chars[i]
+                                    char2 = candidate_chars[i + 1]
+                                    time1 = candidate_times[i]
+                                    time2 = candidate_times[i + 1]
+                                    
+                                    interval = time2 - time1
+                                    
+                                    if MIN_INTERVAL_MS <= interval <= MAX_INTERVAL_MS:
+                                        bigram = char1 + char2
+                                        bigram_intervals.append((participant_id, sentence_key, bigram, interval, time1, time2))
+                                
+                                # Mark positions as used
+                                for pos in range(start_pos, start_pos + len(expected_word)):
+                                    used_positions_for_bigrams.add(pos)
+                                break
+                                                
     except FileNotFoundError:
         print(f"Warning: Keystroke file not found for participant {participant_id}")
-        return [], [], []
+        return [], []
     except Exception as e:
         print(f"Error processing keystroke file for participant {participant_id}: {e}")
-        return [], [], []
+        return [], []
     
-    return bigram_intervals, sentence_times, word_times
+    return bigram_intervals, word_times
 
 def calculate_all_data(filtered_file, keystroke_dir="."):
-    """Process all filtered participants and calculate bigram intervals, sentence times, and word times"""
+    """Process all filtered participants and calculate bigram intervals and word times"""
     
     print(f"Reading filtered participants from: {filtered_file}")
     participant_ids = read_filtered_participants(filtered_file)
@@ -292,27 +276,24 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
     print(f"Processing keystroke files from directory: {keystroke_dir}")
     
     all_bigrams = []
-    all_sentence_times = []
     all_word_times = []
     processed_count = 0
     
     for participant_id in participant_ids:
         print(f"Processing participant {participant_id}...", end=" ")
         
-        bigrams, sentence_times, word_times = process_keystroke_file(participant_id, keystroke_dir)
+        bigrams, word_times = process_keystroke_file(participant_id, keystroke_dir)
         
-        if bigrams or sentence_times or word_times:
+        if bigrams or word_times:
             all_bigrams.extend(bigrams)
-            all_sentence_times.extend(sentence_times)
             all_word_times.extend(word_times)
             processed_count += 1
-            print(f"✓ ({len(bigrams)} correct bigrams, {len(sentence_times)} correct sentences, {len(word_times)} correct multi-letter words)")
+            print(f"✓ ({len(bigrams)} correct bigrams, {len(word_times)} correct multi-letter words)")
         else:
             print("✗ (no correct data)")
     
     print(f"\nProcessed {processed_count}/{len(participant_ids)} participants")
     print(f"Total correct bigrams collected: {len(all_bigrams)}")
-    print(f"Total correct sentence times collected: {len(all_sentence_times)}")
     print(f"Total correct multi-letter word times collected: {len(all_word_times)}")
     
     # Write bigram results to CSV
@@ -327,19 +308,6 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
         
     except Exception as e:
         print(f"Error writing bigram output file: {e}")
-    
-    # Write sentence timing results to separate CSV
-    sentence_output_file = 'sentence_times.csv'    
-    try:
-        with open(sentence_output_file, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(['sentence', 'time'])
-            writer.writerows(all_sentence_times)
-        
-        print(f"Correct sentence timing results written to: {sentence_output_file}")
-        
-    except Exception as e:
-        print(f"Error writing sentence timing output file: {e}")
     
     # Write word timing results to separate CSV
     word_output_file = 'word_times.csv'    
@@ -370,13 +338,6 @@ def calculate_all_data(filtered_file, keystroke_dir="."):
         for bigram, count in sorted(bigram_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
             print(f"    {bigram}: {count} occurrences")
     
-    if all_sentence_times:
-        times = [time for _, time in all_sentence_times]
-        print(f"\nCorrect Sentence Timing Statistics:")
-        print(f"  Mean sentence time: {sum(times)/len(times):.1f} ms")
-        print(f"  Min sentence time: {min(times)} ms")
-        print(f"  Max sentence time: {max(times)} ms")
-    
     if all_word_times:
         times = [time for _, _, _, time, _, _ in all_word_times]
         word_counts = defaultdict(int)
@@ -400,7 +361,6 @@ def main():
         print("Example: python process_keystroke_data.py filtered_metadata_participants.txt ./data/files/")
         print(f"\nOutputs (correctly typed data with {MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms intervals only):")
         print("  - bigram_times.csv: participant_id, sentence_id, bigram, interkey_interval, timestamp1, timestamp2")
-        print("  - sentence_times.csv: sentence, time")
         print("  - word_times.csv: participant_id, sentence_id, word, time, start_timestamp, end_timestamp")
         sys.exit(1)
     
@@ -410,6 +370,7 @@ def main():
     print("Keystroke Data Analysis Tool")
     print("=" * 40)
     print(f"Filtering outliers: intervals outside {MIN_INTERVAL_MS}-{MAX_INTERVAL_MS}ms excluded")
+    print("Processing: Bigrams and Words only")
     print("")
     
     calculate_all_data(filtered_file, keystroke_dir)
