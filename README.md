@@ -4,10 +4,10 @@ to analyze bigram and word typing speeds.
 
 **Repository**: https://github.com/binarybottle/process_3.5M_keystrokes.git  
 **Author**: Arno Klein (arnoklein.info)  
-**License**: MIT License (see LICENSE)
+**License**: MIT License (136M Keystrokes datasetsee LICENSE)
 
 ## Data
-The 136M Keystrokes dataset contains keystroke data of over 168000 users 
+The  contains keystroke data of over 168000 users 
 typing 15 sentences each. The data was collected via an online typing test 
 published at a free typing speed assessment webpage. 
 https://userinterfaces.aalto.fi/136Mkeystrokes/
